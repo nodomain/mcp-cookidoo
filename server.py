@@ -9,6 +9,7 @@ over stdio for local Claude Desktop use.
 import json
 import os
 import re
+import time
 from typing import Optional
 
 from fastmcp import FastMCP
@@ -48,7 +49,10 @@ async def _ensure_connected() -> tuple[Optional[str], Optional[CookidooService]]
     """
     global _cookidoo_service, _cookidoo_api
     if _cookidoo_service and _cookidoo_api:
-        if _cookidoo_api.expires_in > TOKEN_REFRESH_BUFFER_SECONDS:
+        # cookidoo-api 0.18.x exposes the absolute expiry as ``_expires_at``
+        # (a Unix timestamp); there is no ``expires_in`` attribute.
+        seconds_left = getattr(_cookidoo_api, "_expires_at", 0.0) - time.time()
+        if seconds_left > TOKEN_REFRESH_BUFFER_SECONDS:
             return None, _cookidoo_service
         try:
             await _cookidoo_api.refresh_token()
@@ -394,6 +398,31 @@ async def list_my_custom_recipes() -> str:
             f"{it.get('servings', '?')} portions, {it.get('total_time', '?')})"
         )
     return "\n".join(lines)
+
+
+@mcp.tool()
+async def attach_recipe_image(recipe_id: str, image_path: str) -> str:
+    """
+    Attach a local image file to a custom recipe as its recipe photo.
+
+    Uploads the image to Cookidoo's Cloudinary backend (server-signed) and sets
+    it on the recipe, so it shows up on the recipe card and on the TM7. Give the
+    recipe_id (from upload_custom_recipe or list_my_custom_recipes) and an
+    absolute path to a JPEG/PNG on disk. Auto-connects if needed.
+    """
+    error, service = await _ensure_connected()
+    if error:
+        return error
+    try:
+        with open(image_path, "rb") as f:
+            image_bytes = f.read()
+    except OSError as e:
+        return f"Could not read image file: {e}"
+    try:
+        image_ref = await service.upload_recipe_image(recipe_id, image_bytes)
+        return f"Image attached to recipe {recipe_id} (public_id: {image_ref})."
+    except Exception as e:
+        return f"Failed to attach image: {e}"
 
 
 @mcp.tool()

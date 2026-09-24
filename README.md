@@ -63,6 +63,7 @@ Let Claude read recipes from your Cookidoo account and create new TM7-optimized 
 | `validate_recipe_quality(recipe_json)` | Score recipe against TM7 criteria with suggestions. |
 | `upload_custom_recipe(recipe_json, force_upload=false)` | Upload to the user's account. Quality-gated, with rollback on failure. |
 | `list_my_custom_recipes()` | List custom recipes in the account. |
+| `attach_recipe_image(recipe_id, image_path)` | Upload a local image and set it as the recipe photo (shows on the card and TM7). |
 | `delete_custom_recipe(recipe_id)` | Delete a custom recipe. Irreversible. |
 
 ## MCP Prompts

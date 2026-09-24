@@ -505,7 +505,80 @@ class CookidooService:
                 }
             )
         return items
-    
+
+    # Cookidoo stores custom-recipe images in Cloudinary under the
+    # ``vorwerk-users-gc`` cloud with a server-signed upload. The signature is
+    # minted by the created-recipes API; the returned public_id (plus its
+    # format extension) is what the recipe's ``image`` field accepts.
+    _CLOUDINARY_URL = "https://api-eu.cloudinary.com/v1_1/vorwerk-users-gc/image/upload"
+    _CLOUDINARY_API_KEY = "993585863591145"
+    _CLOUDINARY_UPLOAD_PRESET = "prod-customer-recipe-signed"
+
+    async def upload_recipe_image(self, recipe_id: str, image_bytes: bytes) -> str:
+        """Upload an image to Cloudinary and attach it to a custom recipe.
+
+        Flow (reverse-engineered from the Cookidoo web upload):
+          1. POST /created-recipes/{locale}/image/signature -> {signature}
+          2. POST the image to Cloudinary with the signature + api_key + preset
+          3. PATCH only {image, isImageOwnedByUser} onto the recipe (a minimal
+             patch avoids the prepTime/instructions schema round-trip issues)
+
+        Returns the Cloudinary public_id (with extension) that was set.
+        """
+        if not self._api_client or not self._session:
+            raise Exception("Not authenticated. Please call login() first.")
+
+        import time as _time
+
+        localization = self._api_client.localization
+        url_parts = localization.url.split("/")
+        base_url = f"{url_parts[0]}//{url_parts[2]}"
+        locale = localization.language
+
+        # 1. signature
+        timestamp = int(_time.time())
+        sig_url = f"{base_url}/created-recipes/{locale}/image/signature"
+        status, text = await self._authed_request(
+            "POST",
+            sig_url,
+            json_body={
+                "upload_preset": self._CLOUDINARY_UPLOAD_PRESET,
+                "source": "uw",
+                "timestamp": timestamp,
+            },
+        )
+        if status != 200:
+            raise Exception(f"Failed to get image signature. Status: {status}, Error: {text}")
+        signature = json.loads(text)["signature"]
+
+        # 2. Cloudinary upload (no auth header — the signature authorizes it)
+        form = aiohttp.FormData()
+        form.add_field("upload_preset", self._CLOUDINARY_UPLOAD_PRESET)
+        form.add_field("source", "uw")
+        form.add_field("signature", signature)
+        form.add_field("timestamp", str(timestamp))
+        form.add_field("api_key", self._CLOUDINARY_API_KEY)
+        form.add_field("file", image_bytes, filename="recipe.jpg", content_type="image/jpeg")
+        async with self._session.request("POST", self._CLOUDINARY_URL, data=form) as r:
+            cl_status = r.status
+            cl_text = await r.text()
+        if cl_status != 200:
+            raise Exception(f"Cloudinary upload failed. Status: {cl_status}, Error: {cl_text}")
+        cl = json.loads(cl_text)
+        # The image field pattern requires a file extension; public_id has none.
+        image_ref = f"{cl['public_id']}.{cl['format']}"
+
+        # 3. minimal PATCH — only the image fields
+        update_url = f"{base_url}/created-recipes/{locale}/{recipe_id}"
+        status, text = await self._authed_request(
+            "PATCH",
+            update_url,
+            json_body={"image": image_ref, "isImageOwnedByUser": True},
+        )
+        if status not in (200, 204):
+            raise Exception(f"Failed to attach image. Status: {status}, Error: {text}")
+        return image_ref
+
     @property
     def api_client(self) -> Optional[Cookidoo]:
         """Get the current API client instance."""
