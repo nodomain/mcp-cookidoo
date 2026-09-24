@@ -445,6 +445,81 @@ async def delete_custom_recipe(recipe_id: str) -> str:
 
 
 @mcp.tool()
+async def update_custom_recipe(
+    recipe_id: str, recipe_json: str, force_upload: bool = False
+) -> str:
+    """
+    Update an EXISTING custom recipe in place, preserving its ID and its recipe
+    photo. Use this to correct or revise a recipe you already uploaded, instead
+    of creating a new one and deleting the old — the recipe URL stays the same
+    and the attached image is kept.
+
+    recipe_json is the same shape as upload_custom_recipe (name, ingredients,
+    steps, servings, prep_time, total_time, hints, tools). Quality is validated
+    first and the update is refused below the quality bar unless force_upload=True.
+    Auto-connects if needed.
+    """
+    error, service = await _ensure_connected()
+    if error:
+        return error
+
+    try:
+        data = json.loads(recipe_json)
+        recipe = CustomRecipe(**data)
+    except json.JSONDecodeError as e:
+        return f"Invalid JSON: {e}"
+    except Exception as e:
+        return f"Invalid recipe data: {e}"
+
+    quality = _score_recipe(recipe)
+    if not quality["meets_bar"] and not force_upload:
+        lines = [
+            f"Update blocked — quality score {quality['score']}/100 below bar {QUALITY_BAR}.",
+            "",
+            "Issues:",
+        ]
+        for issue in quality["issues"]:
+            lines.append(f"  ✗ {issue}")
+        if quality["suggestions"]:
+            lines.append("")
+            lines.append("Suggestions:")
+            for s in quality["suggestions"]:
+                lines.append(f"  • {s}")
+        lines.append("")
+        lines.append(
+            "Revise the steps with Thermomix vocabulary and TM7 parallelization, "
+            "then call validate_recipe_quality again. To override, pass force_upload=true."
+        )
+        return "\n".join(lines)
+
+    try:
+        await service.update_custom_recipe(
+            recipe_id=recipe_id,
+            name=recipe.name,
+            ingredients=recipe.ingredients,
+            steps=recipe.steps,
+            servings=recipe.servings,
+            prep_time=recipe.prep_time,
+            total_time=recipe.total_time,
+            hints=recipe.hints,
+            tools=recipe.tools,
+        )
+        from urllib.parse import urlparse
+        localization = _cookidoo_api.localization
+        parsed = urlparse(localization.url)
+        recipe_url = (
+            f"{parsed.scheme}://{parsed.netloc}/created-recipes/"
+            f"{localization.language}/{recipe_id}/edit"
+        )
+        return (
+            f"Recipe '{recipe.name}' updated in place (quality {quality['score']}/100).\n\n"
+            f"Recipe ID: {recipe_id}\nURL: {recipe_url}"
+        )
+    except Exception as e:
+        return f"Update failed: {e}"
+
+
+@mcp.tool()
 async def upload_custom_recipe(recipe_json: str, force_upload: bool = False) -> str:
     """
     Upload a recipe to the user's Cookidoo account.

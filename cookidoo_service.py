@@ -467,6 +467,86 @@ class CookidooService:
         except Exception as e:
             raise Exception(f"Failed to create custom recipe: {str(e)}") from e
 
+    async def update_custom_recipe(
+        self,
+        recipe_id: str,
+        name: str,
+        ingredients: list[str],
+        steps: list[str],
+        servings: int = 4,
+        prep_time: int = 30,
+        total_time: int = 60,
+        hints: Optional[list[str]] = None,
+        tools: Optional[list[str]] = None,
+    ) -> str:
+        """
+        Update an EXISTING custom recipe in place, preserving its ID (and its
+        image — the image field is intentionally omitted from the PATCH so the
+        current recipe photo is kept).
+
+        Unlike create_custom_recipe this does not POST a new recipe; it PATCHes
+        the given recipe_id directly with the new title, ingredients, steps,
+        yield and timings. Guided-cooking annotations (time/temp/speed buttons
+        and ingredient chips) are rebuilt from the step text exactly as on create.
+
+        Args:
+            recipe_id: The existing custom-recipe ID to update
+            name: Recipe name
+            ingredients: List of ingredient descriptions
+            steps: List of cooking step descriptions
+            servings: Number of servings (default: 4)
+            prep_time: Preparation time in minutes (default: 30)
+            total_time: Total cooking time in minutes (default: 60)
+            hints: Optional list of hints/tips for the recipe
+            tools: Optional list of Thermomix tool tags (default: TM7/TM6/TM5)
+
+        Returns:
+            str: The recipe ID that was updated
+
+        Raises:
+            Exception: If the update fails
+        """
+        if not self._api_client or not self._session:
+            raise Exception("Not authenticated. Please call login() first.")
+
+        try:
+            localization = self._api_client.localization
+            url_parts = localization.url.split("/")
+            base_url = f"{url_parts[0]}//{url_parts[2]}"
+            locale = localization.language
+
+            update_url = f"{base_url}/created-recipes/{locale}/{recipe_id}"
+            # Image fields are deliberately NOT sent: the existing recipe photo
+            # is kept. Everything else is replaced with the new content.
+            update_data = {
+                "name": name,
+                "tools": tools if tools else ["TM7", "TM6", "TM5"],
+                "yield": {"value": servings, "unitText": "portion"},
+                "prepTime": prep_time * 60,
+                "cookTime": 0,
+                "totalTime": total_time * 60,
+                "ingredients": [{"type": "INGREDIENT", "text": ing} for ing in ingredients],
+                "instructions": [
+                    build_instruction(normalize_action_step(step), ingredients)
+                    for step in steps
+                ],
+                "hints": "\n".join(hints) if hints and isinstance(hints, list) else (hints if hints else ""),
+                "workStatus": "PRIVATE",
+                "recipeMetadata": {"requiresAnnotationsCheck": False},
+            }
+
+            status, text = await self._authed_request(
+                "PATCH", update_url, json_body=update_data
+            )
+            if status not in (200, 204):
+                raise Exception(
+                    f"Failed to update recipe. Status: {status}, Error: {text}"
+                )
+            return recipe_id
+
+        except Exception as e:
+            raise Exception(f"Failed to update custom recipe: {str(e)}") from e
+
     async def delete_custom_recipe(self, recipe_id: str) -> None:
         """Delete one of the user's custom recipes by ID. Refreshes the access
         token once if the library reports an auth failure (expired token)."""
