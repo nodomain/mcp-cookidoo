@@ -401,6 +401,276 @@ async def list_my_custom_recipes() -> str:
 
 
 @mcp.tool()
+async def search_recipes(
+    query: str = "",
+    page: int = 0,
+    page_size: int = 20,
+    ingredients: str = "",
+    exclude_ingredients: str = "",
+    categories: str = "",
+    difficulty: str = "",
+    total_time: int = 0,
+) -> str:
+    """
+    Search the Cookidoo recipe catalog. Returns matching recipes as JSON
+    ({total, recipes:[...]}). All filters are optional: pass a free-text query
+    and/or narrow with ingredients, exclude_ingredients, categories (comma-
+    separated), difficulty, or a total_time cap in minutes. Auto-connects.
+    """
+    error, service = await _ensure_connected()
+    if error:
+        return error
+    filters: dict = {}
+    if ingredients:
+        filters["ingredients"] = [s.strip() for s in ingredients.split(",") if s.strip()]
+    if exclude_ingredients:
+        filters["exclude_ingredients"] = [s.strip() for s in exclude_ingredients.split(",") if s.strip()]
+    if categories:
+        filters["categories"] = [s.strip() for s in categories.split(",") if s.strip()]
+    if difficulty:
+        filters["difficulty"] = difficulty
+    if total_time:
+        filters["total_time"] = total_time
+    try:
+        result = await service.search_recipes(
+            query=query or None, page=page, page_size=page_size, **filters
+        )
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as e:
+        return f"Search failed: {e}"
+
+
+@mcp.tool()
+async def get_shopping_list() -> str:
+    """
+    Get the user's Cookidoo shopping list as JSON: recipe-derived ingredient
+    items, additional (user-added) items, and the recipes on the list.
+    Auto-connects.
+    """
+    error, service = await _ensure_connected()
+    if error:
+        return error
+    try:
+        result = await service.get_shopping_list()
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as e:
+        return f"Failed to get shopping list: {e}"
+
+
+@mcp.tool()
+async def add_recipe_ingredients_to_shopping_list(
+    recipe_ids: str, custom: bool = False
+) -> str:
+    """
+    Add the ingredients of one or more recipes to the shopping list.
+    recipe_ids is a comma-separated list of recipe IDs. Set custom=True when the
+    IDs are created (custom) recipes. Returns the resulting ingredient items as
+    JSON. Auto-connects.
+    """
+    error, service = await _ensure_connected()
+    if error:
+        return error
+    ids = [s.strip() for s in recipe_ids.split(",") if s.strip()]
+    if not ids:
+        return "No recipe IDs given."
+    try:
+        result = await service.add_ingredient_items_for_recipes(ids, custom=custom)
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as e:
+        return f"Failed to add ingredients: {e}"
+
+
+@mcp.tool()
+async def add_shopping_list_items(item_names: str) -> str:
+    """
+    Add free-text items (e.g. 'Kitchen towels, Dish soap') to the shopping
+    list's additional-items section. Comma-separated. Returns the added items
+    (with their IDs) as JSON. Auto-connects.
+    """
+    error, service = await _ensure_connected()
+    if error:
+        return error
+    names = [s.strip() for s in item_names.split(",") if s.strip()]
+    if not names:
+        return "No item names given."
+    try:
+        result = await service.add_additional_items(names)
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as e:
+        return f"Failed to add items: {e}"
+
+
+@mcp.tool()
+async def remove_shopping_list_items(item_ids: str) -> str:
+    """
+    Remove additional (user-added) shopping-list items by their IDs
+    (comma-separated). Auto-connects.
+    """
+    error, service = await _ensure_connected()
+    if error:
+        return error
+    ids = [s.strip() for s in item_ids.split(",") if s.strip()]
+    if not ids:
+        return "No item IDs given."
+    try:
+        await service.remove_additional_items(ids)
+        return f"Removed {len(ids)} item(s)."
+    except Exception as e:
+        return f"Failed to remove items: {e}"
+
+
+@mcp.tool()
+async def clear_shopping_list() -> str:
+    """
+    Clear the entire Cookidoo shopping list (both ingredient items and
+    additional items). Irreversible. Auto-connects.
+    """
+    error, service = await _ensure_connected()
+    if error:
+        return error
+    try:
+        await service.clear_shopping_list()
+        return "Shopping list cleared."
+    except Exception as e:
+        return f"Failed to clear shopping list: {e}"
+
+
+@mcp.tool()
+async def get_meal_plan(day: str) -> str:
+    """
+    Get the meal-plan entries for the calendar week containing the given ISO
+    date (YYYY-MM-DD). Returns the planned recipes per day as JSON. Auto-connects.
+    """
+    error, service = await _ensure_connected()
+    if error:
+        return error
+    try:
+        result = await service.get_calendar_week(day)
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as e:
+        return f"Failed to get meal plan: {e}"
+
+
+@mcp.tool()
+async def add_recipes_to_meal_plan(
+    day: str, recipe_ids: str, custom: bool = False
+) -> str:
+    """
+    Plan one or more recipes on a day (ISO date YYYY-MM-DD). recipe_ids is
+    comma-separated; set custom=True for created (custom) recipes. Returns the
+    updated calendar day as JSON. Auto-connects.
+    """
+    error, service = await _ensure_connected()
+    if error:
+        return error
+    ids = [s.strip() for s in recipe_ids.split(",") if s.strip()]
+    if not ids:
+        return "No recipe IDs given."
+    try:
+        result = await service.add_recipes_to_calendar(day, ids, custom=custom)
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as e:
+        return f"Failed to add to meal plan: {e}"
+
+
+@mcp.tool()
+async def remove_recipe_from_meal_plan(day: str, recipe_id: str) -> str:
+    """
+    Remove one recipe from a planned day (ISO date YYYY-MM-DD). Returns the
+    updated calendar day as JSON. Auto-connects.
+    """
+    error, service = await _ensure_connected()
+    if error:
+        return error
+    try:
+        result = await service.remove_recipe_from_calendar(day, recipe_id)
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as e:
+        return f"Failed to remove from meal plan: {e}"
+
+
+@mcp.tool()
+async def get_collections() -> str:
+    """
+    List the user's custom collections (own cookbooks) as JSON. Auto-connects.
+    """
+    error, service = await _ensure_connected()
+    if error:
+        return error
+    try:
+        result = await service.get_custom_collections()
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as e:
+        return f"Failed to get collections: {e}"
+
+
+@mcp.tool()
+async def create_collection(name: str) -> str:
+    """
+    Create a new custom collection (cookbook) by name. Returns the created
+    collection as JSON. Auto-connects.
+    """
+    error, service = await _ensure_connected()
+    if error:
+        return error
+    try:
+        result = await service.add_custom_collection(name)
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as e:
+        return f"Failed to create collection: {e}"
+
+
+@mcp.tool()
+async def delete_collection(collection_id: str) -> str:
+    """
+    Delete a custom collection by its ID. Auto-connects.
+    """
+    error, service = await _ensure_connected()
+    if error:
+        return error
+    try:
+        await service.remove_custom_collection(collection_id)
+        return f"Collection {collection_id} deleted."
+    except Exception as e:
+        return f"Failed to delete collection: {e}"
+
+
+@mcp.tool()
+async def add_recipes_to_collection(collection_id: str, recipe_ids: str) -> str:
+    """
+    Add recipes (comma-separated IDs) to a custom collection. Returns the
+    updated collection as JSON. Auto-connects.
+    """
+    error, service = await _ensure_connected()
+    if error:
+        return error
+    ids = [s.strip() for s in recipe_ids.split(",") if s.strip()]
+    if not ids:
+        return "No recipe IDs given."
+    try:
+        result = await service.add_recipes_to_custom_collection(collection_id, ids)
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as e:
+        return f"Failed to add recipes to collection: {e}"
+
+
+@mcp.tool()
+async def get_account_info() -> str:
+    """
+    Get the user's account overview as JSON: user info, active subscription
+    (premium/trial/free + expiry), and linked Thermomix devices. Auto-connects.
+    """
+    error, service = await _ensure_connected()
+    if error:
+        return error
+    try:
+        result = await service.get_account_info()
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as e:
+        return f"Failed to get account info: {e}"
+
+
+@mcp.tool()
 async def attach_recipe_image(recipe_id: str, image_path: str) -> str:
     """
     Attach a local image file to a custom recipe as its recipe photo.

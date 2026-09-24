@@ -7,6 +7,8 @@ Module to encapsulate all cookidoo-api logic for interacting with the Cookidoo p
 import json
 import os
 import re
+import dataclasses
+import datetime as _dt
 from typing import Optional
 from dotenv import load_dotenv
 from aiohttp import ClientSession
@@ -367,7 +369,7 @@ class CookidooService:
 
         status, text = await _send()
         if status == 401:
-            await self._api_client.refresh_token()
+            await self._api_client.refresh()
             status, text = await _send()
         return status, text
 
@@ -555,7 +557,7 @@ class CookidooService:
         try:
             await self._api_client.remove_custom_recipe(recipe_id)
         except CookidooAuthException:
-            await self._api_client.refresh_token()
+            await self._api_client.refresh()
             await self._api_client.remove_custom_recipe(recipe_id)
 
     async def list_custom_recipes(self) -> list[dict]:
@@ -585,6 +587,173 @@ class CookidooService:
                 }
             )
         return items
+
+    # ------------------------------------------------------------------
+    # Auth-refresh helper: run a client coroutine, retrying once on an
+    # expired-token auth failure (mirrors delete_custom_recipe's pattern).
+    # ------------------------------------------------------------------
+    async def _with_auth_retry(self, make_coro):
+        if not self._api_client:
+            raise Exception("Not authenticated. Please call login() first.")
+        try:
+            return await make_coro()
+        except CookidooAuthException:
+            await self._api_client.refresh()
+            return await make_coro()
+
+    @staticmethod
+    def _to_jsonable(obj):
+        """Serialize cookidoo-api dataclasses (and lists/dates within) to plain
+        JSON-safe structures."""
+        if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
+            return {k: CookidooService._to_jsonable(v) for k, v in dataclasses.asdict(obj).items()}
+        if isinstance(obj, (list, tuple)):
+            return [CookidooService._to_jsonable(v) for v in obj]
+        if isinstance(obj, dict):
+            return {k: CookidooService._to_jsonable(v) for k, v in obj.items()}
+        if isinstance(obj, (_dt.date, _dt.datetime)):
+            return obj.isoformat()
+        return obj
+
+    # ------------------------------------------------------------------
+    # Recipe search
+    # ------------------------------------------------------------------
+    async def search_recipes(self, query: Optional[str] = None, page: int = 0,
+                             page_size: int = 20, **filters) -> dict:
+        """Search the Cookidoo catalog. Optional filters (ingredients,
+        categories, difficulty, total_time, ...) are passed through to the API.
+        Returns {"total": int, "recipes": [...]}"""
+        result = await self._with_auth_retry(
+            lambda: self._api_client.search_recipes(
+                query, page=page, page_size=page_size, **filters
+            )
+        )
+        return self._to_jsonable(result)
+
+    # ------------------------------------------------------------------
+    # Shopping list
+    # ------------------------------------------------------------------
+    async def get_shopping_list(self) -> dict:
+        """Return the full shopping list: recipe-derived ingredient items,
+        additional (user-added) items, and the recipes on the list."""
+        ingredients = await self._with_auth_retry(
+            lambda: self._api_client.get_ingredient_items()
+        )
+        additional = await self._with_auth_retry(
+            lambda: self._api_client.get_additional_items()
+        )
+        recipes = await self._with_auth_retry(
+            lambda: self._api_client.get_shopping_list_recipes()
+        )
+        return {
+            "ingredient_items": self._to_jsonable(ingredients),
+            "additional_items": self._to_jsonable(additional),
+            "recipes": self._to_jsonable(recipes),
+        }
+
+    async def add_ingredient_items_for_recipes(self, recipe_ids: list[str],
+                                               custom: bool = False) -> list:
+        """Add a recipe's ingredients to the shopping list. Set custom=True for
+        created (custom) recipe IDs."""
+        fn = (self._api_client.add_ingredient_items_for_custom_recipes if custom
+              else self._api_client.add_ingredient_items_for_recipes)
+        result = await self._with_auth_retry(lambda: fn(recipe_ids))
+        return self._to_jsonable(result)
+
+    async def add_additional_items(self, item_names: list[str]) -> list:
+        """Add free-text items (e.g. 'Kitchen towels') to the shopping list."""
+        result = await self._with_auth_retry(
+            lambda: self._api_client.add_additional_items(item_names)
+        )
+        return self._to_jsonable(result)
+
+    async def remove_additional_items(self, item_ids: list[str]) -> None:
+        """Remove additional items by their IDs."""
+        await self._with_auth_retry(
+            lambda: self._api_client.remove_additional_items(item_ids)
+        )
+
+    async def clear_shopping_list(self) -> None:
+        """Clear the entire shopping list (ingredient + additional items)."""
+        await self._with_auth_retry(
+            lambda: self._api_client.clear_shopping_list()
+        )
+
+    # ------------------------------------------------------------------
+    # Meal-plan calendar
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _parse_day(day: str) -> _dt.date:
+        return _dt.date.fromisoformat(day)
+
+    async def get_calendar_week(self, day: str) -> list:
+        """Return the meal-plan entries for the calendar week containing the
+        given ISO date (YYYY-MM-DD)."""
+        d = self._parse_day(day)
+        result = await self._with_auth_retry(
+            lambda: self._api_client.get_recipes_in_calendar_week(d)
+        )
+        return self._to_jsonable(result)
+
+    async def add_recipes_to_calendar(self, day: str, recipe_ids: list[str],
+                                      custom: bool = False) -> dict:
+        """Plan recipes on a day (ISO date). Set custom=True for created recipes."""
+        d = self._parse_day(day)
+        fn = (self._api_client.add_custom_recipes_to_calendar if custom
+              else self._api_client.add_recipes_to_calendar)
+        result = await self._with_auth_retry(lambda: fn(d, recipe_ids))
+        return self._to_jsonable(result)
+
+    async def remove_recipe_from_calendar(self, day: str, recipe_id: str) -> dict:
+        """Remove one recipe from a planned day (ISO date)."""
+        d = self._parse_day(day)
+        result = await self._with_auth_retry(
+            lambda: self._api_client.remove_recipe_from_calendar(d, recipe_id)
+        )
+        return self._to_jsonable(result)
+
+    # ------------------------------------------------------------------
+    # Custom collections (own cookbooks)
+    # ------------------------------------------------------------------
+    async def get_custom_collections(self, page: int = 0) -> list:
+        result = await self._with_auth_retry(
+            lambda: self._api_client.get_custom_collections(page=page)
+        )
+        return self._to_jsonable(result)
+
+    async def add_custom_collection(self, name: str) -> dict:
+        result = await self._with_auth_retry(
+            lambda: self._api_client.add_custom_collection(name)
+        )
+        return self._to_jsonable(result)
+
+    async def remove_custom_collection(self, collection_id: str) -> None:
+        await self._with_auth_retry(
+            lambda: self._api_client.remove_custom_collection(collection_id)
+        )
+
+    async def add_recipes_to_custom_collection(self, collection_id: str,
+                                               recipe_ids: list[str]) -> dict:
+        result = await self._with_auth_retry(
+            lambda: self._api_client.add_recipes_to_custom_collection(
+                collection_id, recipe_ids
+            )
+        )
+        return self._to_jsonable(result)
+
+    # ------------------------------------------------------------------
+    # Account & devices
+    # ------------------------------------------------------------------
+    async def get_account_info(self) -> dict:
+        """Return user info, active subscription and linked devices."""
+        user = await self._with_auth_retry(lambda: self._api_client.get_user_info())
+        sub = await self._with_auth_retry(lambda: self._api_client.get_active_subscription())
+        devices = await self._with_auth_retry(lambda: self._api_client.get_devices())
+        return {
+            "user": self._to_jsonable(user),
+            "subscription": self._to_jsonable(sub),
+            "devices": self._to_jsonable(devices),
+        }
 
     # Cookidoo stores custom-recipe images in Cloudinary under the
     # ``vorwerk-users-gc`` cloud with a server-signed upload. The signature is

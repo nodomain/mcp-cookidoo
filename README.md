@@ -66,6 +66,20 @@ Let Claude read recipes from your Cookidoo account and create new TM7-optimized 
 | `list_my_custom_recipes()` | List custom recipes in the account. |
 | `attach_recipe_image(recipe_id, image_path)` | Upload a local image and set it as the recipe photo (shows on the card and TM7). |
 | `delete_custom_recipe(recipe_id)` | Delete a custom recipe. Irreversible. |
+| `search_recipes(query, page, page_size, ingredients, exclude_ingredients, categories, difficulty, total_time)` | Search the recipe catalog with optional filters. |
+| `get_shopping_list()` | Read the shopping list (ingredient items, additional items, recipes). |
+| `add_recipe_ingredients_to_shopping_list(recipe_ids, custom=false)` | Add a recipe's ingredients to the shopping list. |
+| `add_shopping_list_items(item_names)` | Add free-text items to the shopping list. |
+| `remove_shopping_list_items(item_ids)` | Remove additional shopping-list items by ID. |
+| `clear_shopping_list()` | Clear the entire shopping list. Irreversible. |
+| `get_meal_plan(day)` | Read the meal-plan week containing an ISO date. |
+| `add_recipes_to_meal_plan(day, recipe_ids, custom=false)` | Plan recipes on a day. |
+| `remove_recipe_from_meal_plan(day, recipe_id)` | Remove a recipe from a planned day. |
+| `get_collections()` | List custom collections (own cookbooks). |
+| `create_collection(name)` | Create a custom collection. |
+| `delete_collection(collection_id)` | Delete a custom collection. |
+| `add_recipes_to_collection(collection_id, recipe_ids)` | Add recipes to a collection. |
+| `get_account_info()` | User info, subscription status, and linked devices. |
 
 ## MCP Prompts
 
